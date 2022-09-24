@@ -1,8 +1,21 @@
+"""
+This is where magic happens. We define the pipeline using the @dsl.pipeline decorator.
+The pipeline is composed of 6 steps:
+
+1. Download the dataset
+2. Preprocess the dataset
+3. Split the dataset
+4. Train the model(s)
+5. Evaluate the model(s)
+6. Print the best model
+"""
+
+from typing import NamedTuple
+
 import kfp
 from kfp.v2 import dsl
 from kfp.v2.dsl import component
 from kfp.v2.dsl import Input, Output, Dataset, Metrics
-from typing import NamedTuple
 
 
 @component(
@@ -13,7 +26,7 @@ def upload_data(
     dataset_name: str,
     dataset_subset: str,
     dataset_object: Output[Dataset],
-):
+) -> None:
     """Uploads the dataset and preprocesses it
 
     It will download the dataset from Huggingface.
@@ -27,12 +40,12 @@ def upload_data(
     Returns:
         Nothing
     """
-    from datasets import load_dataset
+    from datasets import load_dataset, DatasetDict
 
     if dataset_subset:
-        dataset = load_dataset(dataset_name, dataset_subset)
+        dataset: DatasetDict = load_dataset(dataset_name, dataset_subset)
     else:
-        dataset = load_dataset(dataset_name)
+        dataset: DatasetDict = load_dataset(dataset_name)
 
     dataset.save_to_disk(dataset_object.path)
 
@@ -45,7 +58,7 @@ def preprocess(
     model_name: str,
     dataset_object: Input[Dataset],
     tokenized_dataset_object: Output[Dataset],
-):
+) -> None:
 
     """Preprocess and save the tokenized dataset
 
@@ -93,10 +106,11 @@ def split_data(
     training_dataset: Output[Dataset],
     validation_dataset: Output[Dataset],
     test_dataset: Output[Dataset],
-):
+) -> None:
     """Splits the dataset into training, validation and test
 
-    Split the dataset into training, validation and test. The split is 80%, 10% and 10% respectively.
+    Split the dataset into training, validation and test.
+    The split is 80%, 10% and 10% respectively.
     If the dataset is already split, it will use the split.
 
     Args:
@@ -108,19 +122,20 @@ def split_data(
     Returns:
         Nothing
     """
-    from datasets import load_from_disk
+    from datasets import load_from_disk, DatasetDict
+    from datasets import Dataset as HFDataset
 
-    dataset = load_from_disk(dataset_object.path)
+    dataset: DatasetDict = load_from_disk(dataset_object.path)
 
     splits = len(dataset)
 
     # We have only the train split
     if splits == 1:
-        dataset = dataset["train"].train_test_split(
+        dataset: DatasetDict = dataset["train"].train_test_split(
             test_size=0.2, stratify_by_column="labels"
         )
 
-        train = dataset["train"]
+        train: Dataset = dataset["train"]
         val = dataset["test"].train_test_split(
             test_size=0.5, stratify_by_column="labels"
         )
@@ -130,7 +145,7 @@ def split_data(
     if splits == 2:
         split_name = "test" if "test" in dataset else "validation"
 
-        train = dataset["train"]
+        train: HFDataset = dataset["train"]
         val = dataset[split_name].train_test_split(
             test_size=0.5, stratify_by_column="labels"
         )
@@ -139,6 +154,9 @@ def split_data(
     # We have train, validation and test split
     if splits == 3:
         train, val, test = dataset["train"], dataset["validation"], dataset["test"]
+
+    if not train or not val or not test:
+        raise ValueError("Something went wrong while splitting the dataset")
 
     train.save_to_disk(training_dataset.path)
     val.save_to_disk(validation_dataset.path)
@@ -165,9 +183,12 @@ def model_training(
 ) -> NamedTuple("Output", [("accuracy", float), ("loss", float), ("best_hp", dict)]):
     """Trains the given model with the dataset
 
-    Trains the model with the dataset, if best_hyperparams is an empty dict, this component will do hyperparameter
-    tuning and return the best hyperparameters. Otherwise, it will concatenate train and validation data and train
-    the model. Lastly, it will evaluate the data with the test send and return the accuracy and loss.
+    Trains the model with the dataset, if best_hyperparams is an empty dict,
+    this component will do hyperparameter tuning and return the best hyperparameters.
+    Otherwise, it will concatenate train and validation data and train
+    the model.
+
+    Lastly, it will evaluate the data with the test send and return the accuracy and loss.
 
     Args:
         model_name: Name of the model from Huggingface
@@ -181,6 +202,8 @@ def model_training(
         NamedTuple with the accuracy, loss and best hyperparameters
     """
 
+    from typing import NamedTuple
+
     from datasets import load_from_disk
     from datasets import Dataset as HFDataset
     from transformers import AutoTokenizer, TFAutoModel, DataCollatorWithPadding
@@ -189,7 +212,8 @@ def model_training(
     import tensorflow as tf
 
     import keras
-    from keras import Model, Input
+    from keras import Model
+    from keras import Input as KerasInput
     from keras_tuner import HyperParameters, BayesianOptimization
     from keras.layers import Dense
 
@@ -231,14 +255,18 @@ def model_training(
             )
 
             if i == 0:
-                x = Dense(neuron_count, activation="relu")(last_hidden_state[:, :, 0])
+                hidden_layer = Dense(neuron_count, activation="relu")(
+                    last_hidden_state[:, :, 0]
+                )
                 continue
 
-            x = Dense(neuron_count, activation="relu")(x)
+            hidden_layer = Dense(neuron_count, activation="relu")(hidden_layer)
 
-        x = Dense(num_labels, "softmax")(x)
+        classification_layer = Dense(num_labels, "softmax")(hidden_layer)
 
-        model = Model(inputs=[input_ids, attention_mask], outputs=[x])
+        model = Model(
+            inputs=[input_ids, attention_mask], outputs=[classification_layer]
+        )
         model.compile(
             optimizer="adam",
             loss="sparse_categorical_crossentropy",
@@ -248,12 +276,12 @@ def model_training(
         return model
 
     def model_builder_small(hp: HyperParameters) -> Model:
-        input_ids = Input(
+        input_ids = KerasInput(
             name="input_ids",
             shape=tokenizer.init_kwargs["model_max_length"],
             dtype="int32",
         )
-        attention_mask = Input(
+        attention_mask = KerasInput(
             name="attention_mask",
             shape=tokenizer.init_kwargs["model_max_length"],
             dtype="int32",
@@ -270,14 +298,18 @@ def model_training(
             )
 
             if i == 0:
-                x = Dense(neuron_count, activation="relu")(sentence_embedding)
+                hidden_layer = Dense(neuron_count, activation="relu")(
+                    sentence_embedding
+                )
                 continue
 
-            x = Dense(neuron_count, activation="relu")(x)
+            hidden_layer = Dense(neuron_count, activation="relu")(hidden_layer)
 
-        x = Dense(num_labels, "softmax")(x)
+        classification_layer = Dense(num_labels, "softmax")(hidden_layer)
 
-        model = Model(inputs=[input_ids, attention_mask], outputs=[x])
+        model = Model(
+            inputs=[input_ids, attention_mask], outputs=[classification_layer]
+        )
         model.compile(
             optimizer="adam",
             loss="sparse_categorical_crossentropy",
@@ -312,7 +344,7 @@ def model_training(
     tf_val = hf_to_tf(val)
     tf_test = hf_to_tf(test)
 
-    output = NamedTuple(
+    OutputTuple = NamedTuple(
         "Output", [("accuracy", float), ("loss", float), ("best_hp", dict)]
     )
 
@@ -334,7 +366,7 @@ def model_training(
         But this object has get_config() and from_config() methods
         """
 
-        return output(0.0, 0.0, best_hp.get_config())
+        return OutputTuple(0.0, 0.0, best_hp.get_config())
 
     model = model_builder_small(HyperParameters.from_config(best_hyperparams))
 
@@ -346,15 +378,15 @@ def model_training(
     for key, value in result.items():
         metric.log_metric(key, value)
 
-    return output(result["accuracy"], result["loss"], {})
+    return OutputTuple(result["accuracy"], result["loss"], {})
 
 
 @dsl.component(output_component_file="print_best.yaml")
-def print_best(best_accuracy: float):
+def print_best(best_accuracy: float) -> None:
     """Prints the best accuracy
 
     Yes, literally just prints the best accuracy. You can do whatever you want here. Change the code a little,
-    and you can send an email, create a slack message, etc. or upload the best model to a model registry.
+    and you can send an email, create a Slack message, etc. or upload the best model to a model registry.
 
     Args:
         best_accuracy: Best accuracy
@@ -370,7 +402,7 @@ def print_best(best_accuracy: float):
 )
 def classification_training_pipeline(
     dataset_name: str, dataset_subset: str, model_names: str
-):
+) -> None:
     """Pipeline for training a text classification model
 
     Args:
@@ -422,8 +454,8 @@ def classification_training_pipeline(
 def run_pipeline(
     dataset_name: str = "tweet_eval",
     dataset_subset: str = "emotion",
-    model_name: str = "google/electra-small-discriminator",
-):
+    model_names: str = "google/electra-small-discriminator",
+) -> None:
     """Runs the pipeline
 
     Args:
@@ -445,7 +477,7 @@ def run_pipeline(
         arguments={
             "dataset_name": dataset_name,
             "dataset_subset": dataset_subset,
-            "model_name": model_name,
+            "model_names": model_names,
         },
         run_name="classification Experiment",
         experiment_name="Version 4",
