@@ -383,7 +383,7 @@ def model_training(
 
 
 @dsl.component(output_component_file="print_best.yaml")
-def print_best(best_accuracy: float) -> None:
+def print_best(all_results: list, metrics: Output[Metrics]) -> None:
     """Prints the best accuracy
 
     Yes, literally just prints the best accuracy. You can do whatever you want here. Change the code a little,
@@ -395,7 +395,8 @@ def print_best(best_accuracy: float) -> None:
     Returns:
         None
     """
-    print(best_accuracy)
+    all_results.sort(key=lambda x: x.outputs["accuracy"], reverse=True)
+    metrics.log_metric("best_accuracy", all_results[0].outputs["accuracy"])
 
 
 @dsl.pipeline(
@@ -419,7 +420,7 @@ def classification_training_pipeline(
 
     all_results = []
 
-    for model_name in ["?model_names?"]:
+    with dsl.ParallelFor(["?model_names?"]) as model_name:
         dataset_path = upload_op.outputs["dataset_object"]
         preprocess_op = preprocess(model_name, dataset_path)
 
@@ -448,9 +449,8 @@ def classification_training_pipeline(
 
         all_results.append(training_op)
 
-    all_results.sort(key=lambda x: x.outputs["accuracy"], reverse=True)
-    best_accuracy = all_results[0].outputs["accuracy"]
-    print_best(best_accuracy)
+
+    print_best(all_results)
 
 
 
