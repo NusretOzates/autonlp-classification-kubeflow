@@ -35,3 +35,11 @@ in the future as there is already a [Kubeflow component](https://github.com/kube
 - Change the Kubeflow host in `pipeline/pipeline.py` file.
 - Run the app with `streamlit run Trainer.py` command.
 - As you connect your cloud environment's cluster, you will most probably have necessary permissions to access cloud resources such as GC Storage, AWS S3, etc.
+
+## Images
+
+![](ui.png)
+
+![](ui_success.png)
+
+![](pipeline.png)
