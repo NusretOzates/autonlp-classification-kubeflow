@@ -13,9 +13,11 @@ The pipeline is composed of 6 steps:
 from typing import NamedTuple
 
 import kfp
+import kfp_server_api
 from kfp.v2 import dsl
 from kfp.v2.dsl import component
 from kfp.v2.dsl import Input, Output, Dataset, Metrics
+from kfp.compiler.compiler import Compiler
 
 
 @component(
@@ -23,9 +25,9 @@ from kfp.v2.dsl import Input, Output, Dataset, Metrics
     output_component_file="upload_data_component.yaml",
 )
 def upload_data(
-    dataset_name: str,
-    dataset_subset: str,
-    dataset_object: Output[Dataset],
+        dataset_name: str,
+        dataset_subset: str,
+        dataset_object: Output[Dataset],
 ) -> None:
     """Uploads the dataset and preprocesses it
 
@@ -55,11 +57,10 @@ def upload_data(
     output_component_file="upload_data_component.yaml",
 )
 def preprocess(
-    model_name: str,
-    dataset_object: Input[Dataset],
-    tokenized_dataset_object: Output[Dataset],
+        model_name: str,
+        dataset_object: Input[Dataset],
+        tokenized_dataset_object: Output[Dataset],
 ) -> None:
-
     """Preprocess and save the tokenized dataset
 
     The preprocessing is:
@@ -102,10 +103,10 @@ def preprocess(
     output_component_file="split_data_component.yaml",
 )
 def split_data(
-    dataset_object: Input[Dataset],
-    training_dataset: Output[Dataset],
-    validation_dataset: Output[Dataset],
-    test_dataset: Output[Dataset],
+        dataset_object: Input[Dataset],
+        training_dataset: Output[Dataset],
+        validation_dataset: Output[Dataset],
+        test_dataset: Output[Dataset],
 ) -> None:
     """Splits the dataset into training, validation and test
 
@@ -174,12 +175,12 @@ def split_data(
     output_component_file="training_component.yaml",
 )
 def model_training(
-    model_name: str,
-    best_hyperparams: dict,
-    training_dataset: Input[Dataset],
-    validation_dataset: Input[Dataset],
-    test_dataset: Input[Dataset],
-    metric: Output[Metrics],
+        model_name: str,
+        best_hyperparams: dict,
+        training_dataset: Input[Dataset],
+        validation_dataset: Input[Dataset],
+        test_dataset: Input[Dataset],
+        metric: Output[Metrics],
 ) -> NamedTuple("Output", [("accuracy", float), ("loss", float), ("best_hp", dict)]):
     """Trains the given model with the dataset
 
@@ -401,7 +402,7 @@ def print_best(best_accuracy: float) -> None:
     name="text-classification",
 )
 def classification_training_pipeline(
-    dataset_name: str, dataset_subset: str, model_name: str
+        dataset_name: str, dataset_subset: str
 ) -> None:
     """Pipeline for training a text classification model
 
@@ -416,65 +417,40 @@ def classification_training_pipeline(
 
     upload_op = upload_data(dataset_name, dataset_subset)
 
-    dataset_path = upload_op.outputs["dataset_object"]
-    preprocess_op = preprocess(model_name, dataset_path)
+    all_results = []
 
-    tokenized_dataset_path = preprocess_op.outputs["tokenized_dataset_object"]
-    split_op = split_data(tokenized_dataset_path)
+    for model_name in ["?model_names?"]:
+        dataset_path = upload_op.outputs["dataset_object"]
+        preprocess_op = preprocess(model_name, dataset_path)
 
-    training_dataset = split_op.outputs["training_dataset"]
-    validation_dataset = split_op.outputs["validation_dataset"]
-    test_dataset = split_op.outputs["test_dataset"]
-    hp_tune_op = model_training(
-        model_name=model_name,
-        best_hyperparams={},
-        training_dataset=training_dataset,
-        validation_dataset=validation_dataset,
-        test_dataset=test_dataset,
-    )
+        tokenized_dataset_path = preprocess_op.outputs["tokenized_dataset_object"]
+        split_op = split_data(tokenized_dataset_path)
 
-    best_hp: dict = hp_tune_op.outputs["best_hp"]
-    training_op = model_training(
-        model_name=model_name,
-        best_hyperparams=best_hp,
-        training_dataset=training_dataset,
-        validation_dataset=validation_dataset,
-        test_dataset=test_dataset,
-    )
+        training_dataset = split_op.outputs["training_dataset"]
+        validation_dataset = split_op.outputs["validation_dataset"]
+        test_dataset = split_op.outputs["test_dataset"]
+        hp_tune_op = model_training(
+            model_name=model_name,
+            best_hyperparams={},
+            training_dataset=training_dataset,
+            validation_dataset=validation_dataset,
+            test_dataset=test_dataset,
+        )
+
+        best_hp: dict = hp_tune_op.outputs["best_hp"]
+        training_op = model_training(
+            model_name=model_name,
+            best_hyperparams=best_hp,
+            training_dataset=training_dataset,
+            validation_dataset=validation_dataset,
+            test_dataset=test_dataset,
+        )
+
+        all_results.append(training_op)
+
+    all_results.sort(key=lambda x: x.outputs["accuracy"], reverse=True)
+    best_accuracy = all_results[0].outputs["accuracy"]
+    print_best(best_accuracy)
 
 
-    print_best(training_op.outputs["accuracy"])
 
-
-def run_pipeline(
-    dataset_name: str = "tweet_eval",
-    dataset_subset: str = "emotion",
-    model_names: str = "google/electra-small-discriminator",
-) -> None:
-    """Runs the pipeline
-
-    Args:
-        dataset_name: Name of the dataset
-        dataset_subset: Subset of the dataset
-        model_name: Name of the model
-
-    Returns:
-        None
-    """
-
-    # Connect to KFP, this command is used to connect to the KFP UI:
-    # kubectl port-forward -n kubeflow svc/ml-pipeline-ui 8080:80
-    client = kfp.Client(host="http://127.0.0.1:8080/pipeline")
-
-    # Run the pipeline
-    client.create_run_from_pipeline_func(
-        classification_training_pipeline,
-        arguments={
-            "dataset_name": dataset_name,
-            "dataset_subset": dataset_subset,
-            "model_name": model_names,
-        },
-        run_name="classification Experiment",
-        experiment_name="Version 4",
-        mode=kfp.dsl.PipelineExecutionMode.V2_COMPATIBLE,
-    )

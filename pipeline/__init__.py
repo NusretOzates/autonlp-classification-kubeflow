@@ -1,1 +1,1 @@
-from .pipeline import run_pipeline
+from .pipeline_runner import run_pipeline
