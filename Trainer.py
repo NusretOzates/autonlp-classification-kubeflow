@@ -1,5 +1,5 @@
 """
-Streamlit homepage to input dataset name and model name(s)
+Streamlit homepage to input dataset name and model name
 """
 
 import streamlit
@@ -12,7 +12,7 @@ def start_training(dataset: str, dataset_subset: str, models: str) -> None:
     Args:
         dataset: Dataset to use for training
         dataset_subset: Subset of dataset to use for training
-        models: Models to train
+        models: Model to train
 
     Returns:
         None
@@ -42,7 +42,7 @@ dataset_name = streamlit.text_input("Dataset Name from Huggingface")
 dataset_subset_name = streamlit.text_input("Name of the subset if any")
 
 streamlit.subheader("Model Selection")
-model_names = streamlit.text_input("Model name(s) from Huggingface")
+model_names = streamlit.text_input("Model name from Huggingface")
 
 streamlit.button(
     "Train",

@@ -188,7 +188,7 @@ def model_training(
     Otherwise, it will concatenate train and validation data and train
     the model.
 
-    Lastly, it will evaluate the data with the test send and return the accuracy and loss.
+    Lastly, it will evaluate the data with the test set and return the accuracy and loss.
 
     Args:
         model_name: Name of the model from Huggingface
@@ -401,7 +401,7 @@ def print_best(best_accuracy: float) -> None:
     name="text-classification",
 )
 def classification_training_pipeline(
-    dataset_name: str, dataset_subset: str, model_names: str
+    dataset_name: str, dataset_subset: str, model_name: str
 ) -> None:
     """Pipeline for training a text classification model
 
@@ -416,39 +416,34 @@ def classification_training_pipeline(
 
     upload_op = upload_data(dataset_name, dataset_subset)
 
-    all_results = []
+    dataset_path = upload_op.outputs["dataset_object"]
+    preprocess_op = preprocess(model_name, dataset_path)
 
-    for model_name in model_names.split(","):
-        dataset_path = upload_op.outputs["dataset_object"]
-        preprocess_op = preprocess(model_name, dataset_path)
+    tokenized_dataset_path = preprocess_op.outputs["tokenized_dataset_object"]
+    split_op = split_data(tokenized_dataset_path)
 
-        tokenized_dataset_path = preprocess_op.outputs["tokenized_dataset_object"]
-        split_op = split_data(tokenized_dataset_path)
+    training_dataset = split_op.outputs["training_dataset"]
+    validation_dataset = split_op.outputs["validation_dataset"]
+    test_dataset = split_op.outputs["test_dataset"]
+    hp_tune_op = model_training(
+        model_name=model_name,
+        best_hyperparams={},
+        training_dataset=training_dataset,
+        validation_dataset=validation_dataset,
+        test_dataset=test_dataset,
+    )
 
-        training_dataset = split_op.outputs["training_dataset"]
-        validation_dataset = split_op.outputs["validation_dataset"]
-        test_dataset = split_op.outputs["test_dataset"]
-        hp_tune_op = model_training(
-            model_name=model_name,
-            best_hyperparams={},
-            training_dataset=training_dataset,
-            validation_dataset=validation_dataset,
-            test_dataset=test_dataset,
-        )
+    best_hp: dict = hp_tune_op.outputs["best_hp"]
+    training_op = model_training(
+        model_name=model_name,
+        best_hyperparams=best_hp,
+        training_dataset=training_dataset,
+        validation_dataset=validation_dataset,
+        test_dataset=test_dataset,
+    )
 
-        best_hp: dict = hp_tune_op.outputs["best_hp"]
-        training_op = model_training(
-            model_name=model_name,
-            best_hyperparams=best_hp,
-            training_dataset=training_dataset,
-            validation_dataset=validation_dataset,
-            test_dataset=test_dataset,
-        )
 
-        all_results.append(training_op)
-
-    all_results.sort(key=lambda x: x.outputs["loss"])
-    print_best(all_results[-1].outputs["accuracy"])
+    print_best(training_op.outputs["accuracy"])
 
 
 def run_pipeline(
@@ -477,7 +472,7 @@ def run_pipeline(
         arguments={
             "dataset_name": dataset_name,
             "dataset_subset": dataset_subset,
-            "model_names": model_names,
+            "model_name": model_names,
         },
         run_name="classification Experiment",
         experiment_name="Version 4",
